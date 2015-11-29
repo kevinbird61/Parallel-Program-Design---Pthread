@@ -6,7 +6,7 @@
 #include <cstring>
 #include <cstdlib>
 #include "bmp.h"
-
+#include <mpi.h>
 using namespace std;
 
 //定義平滑運算的次數
