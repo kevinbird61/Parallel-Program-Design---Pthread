@@ -1,4 +1,3 @@
-#include <mpi.h>
 #include <iostream>
 #include <string>
 #include <fstream>
@@ -6,7 +5,7 @@
 #include <cstring>
 #include <cstdlib>
 #include "bmp.h"
-#include <mpi.h>
+#include <pthread.h>
 using namespace std;
 
 //定義平滑運算的次數
@@ -35,6 +34,35 @@ int readBMP( char *fileName);        //read file
 int saveBMP( char *fileName);        //save file
 void swap(RGBTRIPLE *a, RGBTRIPLE *b);
 RGBTRIPLE **alloc_memory( int Y, int X );        //allocate memory
+/* For the struct of parameter */  
+typedef struct __param{
+	int h;
+	int start_index;
+} PARAM;
+
+/* For each thread's thread function */
+void *cal_Smooth(void* param){
+	PARAM *tcb =(PARAM*) param;
+	//進行平滑運算
+	for(int i = tcb->start_index ; i< (tcb->start_index + tcb->h) ; i++)
+		for(int j =0; j<bmpInfo.biWidth ; j++){
+			/*********************************************************/
+			/*設定上下左右像素的位置                                 */
+			/*********************************************************/
+			int Top = i>0 ? i-1 : bmpInfo.biHeight-1;
+			int Down = i<bmpInfo.biHeight-1 ? i+1 : 0;
+			int Left = j>0 ? j-1 : bmpInfo.biWidth-1;
+			int Right = j<bmpInfo.biWidth-1 ? j+1 : 0;
+			/*********************************************************/
+			/*與上下左右像素做平均，並四捨五入                       */
+			/*********************************************************/
+			BMPSaveData[i][j].rgbBlue =  (double) (BMPData[i][j].rgbBlue+BMPData[Top][j].rgbBlue+BMPData[Down][j].rgbBlue+BMPData[i][Left].rgbBlue+BMPData[i][Right].rgbBlue)/5+0.5;
+			BMPSaveData[i][j].rgbGreen =  (double) (BMPData[i][j].rgbGreen+BMPData[Top][j].rgbGreen+BMPData[Down][j].rgbGreen+BMPData[i][Left].rgbGreen+BMPData[i][Right].rgbGreen)/5+0.5;
+			BMPSaveData[i][j].rgbRed =  (double) (BMPData[i][j].rgbRed+BMPData[Top][j].rgbRed+BMPData[Down][j].rgbRed+BMPData[i][Left].rgbRed+BMPData[i][Right].rgbRed)/5+0.5;
+		}
+
+	return NULL;
+}
 
 int main(int argc,char *argv[])
 {
@@ -47,61 +75,56 @@ int main(int argc,char *argv[])
 /*********************************************************/
 	char *infileName = "input.bmp";
      	char *outfileName = "output2.bmp";
-	double startwtime = 0.0, endwtime=0;
-
-	MPI_Init(&argc,&argv);
-	
-	//記錄開始時間
-	startwtime = MPI_Wtime();
-
+	clock_t starttime = 0.0, endtime=0;
+	/* Get the amount number of thread */
+	int thread_count = strtol(argv[1], NULL , 10);
+	cout<< thread_count << endl;
+	pthread_t *thread_handles = new pthread_t[ thread_count ];
 	//讀取檔案
         if ( readBMP( infileName) )
                 cout << "Read file successfully!!" << endl;
         else 
                 cout << "Read file fails!!" << endl;
-
+	//記錄開始時間
+	starttime = clock();
 	//動態分配記憶體給暫存空間
         BMPData = alloc_memory( bmpInfo.biHeight, bmpInfo.biWidth);
-
+	/* make the  struct */
+	PARAM *TCB = new PARAM [thread_count];
+	for(int i = 0; i < thread_count ;  i ++){
+		TCB[i].h = ( i==thread_count-1 ? bmpInfo.biHeight / thread_count  : bmpInfo.biHeight / thread_count);
+		TCB[i].start_index = (bmpInfo.biHeight)*i;
+	}
+	for(int i = 0; i < thread_count ;  i ++){
+		cout << "The pid is "<< i << " , and the height is "<< TCB[i].h << "; startindex =  " << TCB[i].start_index<<endl;
+	}
         //進行多次的平滑運算
 	for(int count = 0; count < NSmooth ; count ++){
 		//把像素資料與暫存指標做交換
 		swap(BMPSaveData,BMPData);
-		//進行平滑運算
-		for(int i = 0; i<bmpInfo.biHeight ; i++)
-			for(int j =0; j<bmpInfo.biWidth ; j++){
-				/*********************************************************/
-				/*設定上下左右像素的位置                                 */
-				/*********************************************************/
-				int Top = i>0 ? i-1 : bmpInfo.biHeight-1;
-				int Down = i<bmpInfo.biHeight-1 ? i+1 : 0;
-				int Left = j>0 ? j-1 : bmpInfo.biWidth-1;
-				int Right = j<bmpInfo.biWidth-1 ? j+1 : 0;
-				/*********************************************************/
-				/*與上下左右像素做平均，並四捨五入                       */
-				/*********************************************************/
-				BMPSaveData[i][j].rgbBlue =  (double) (BMPData[i][j].rgbBlue+BMPData[Top][j].rgbBlue+BMPData[Down][j].rgbBlue+BMPData[i][Left].rgbBlue+BMPData[i][Right].rgbBlue)/5+0.5;
-				BMPSaveData[i][j].rgbGreen =  (double) (BMPData[i][j].rgbGreen+BMPData[Top][j].rgbGreen+BMPData[Down][j].rgbGreen+BMPData[i][Left].rgbGreen+BMPData[i][Right].rgbGreen)/5+0.5;
-				BMPSaveData[i][j].rgbRed =  (double) (BMPData[i][j].rgbRed+BMPData[Top][j].rgbRed+BMPData[Down][j].rgbRed+BMPData[i][Left].rgbRed+BMPData[i][Right].rgbRed)/5+0.5;
-			}
+		/* Using pthread do the thing */
+		for(int j = 0 ; j < thread_count ; j++){
+			pthread_create(&thread_handles[j] , NULL , cal_Smooth , (void*)&TCB[j] );
+		}
+		//cal_Smooth();
 	}
- 
+	for(int i = 0; i < thread_count ; i++){
+		pthread_join(thread_handles[i] , NULL);
+	}
+ 	//得到結束時間，並印出執行時間
+	endtime = clock();
+    	cout << "The execution time = "<< (float)((endtime-starttime) / CLOCKS_PER_SEC) <<endl ;
  	//寫入檔案
         if ( saveBMP( outfileName ) )
                 cout << "Save file successfully!!" << endl;
         else
                 cout << "Save file fails!!" << endl;
-	
-	//得到結束時間，並印出執行時間
-        endwtime = MPI_Wtime();
-    	cout << "The execution time = "<< endwtime-startwtime <<endl ;
 
  	free(BMPData);
  	free(BMPSaveData);
- 	MPI_Finalize();
-
         return 0;
 }
+
 
 /*********************************************************/
 /* 讀取圖檔                                              */
