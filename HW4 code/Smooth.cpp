@@ -34,33 +34,47 @@ int readBMP( char *fileName);        //read file
 int saveBMP( char *fileName);        //save file
 void swap(RGBTRIPLE *a, RGBTRIPLE *b);
 RGBTRIPLE **alloc_memory( int Y, int X );        //allocate memory
+int thread_count;
+pthread_mutex_t mutex_p = PTHREAD_MUTEX_INITIALIZER ;
+int counter[2] = { 0 , 0};
 /* For the struct of parameter */  
-typedef struct __param{
-	int h;
-	int start_index;
-} PARAM;
-
 /* For each thread's thread function */
 void *cal_Smooth(void* param){
-	PARAM *tcb =(PARAM*) param;
-	//進行平滑運算
-	for(int i = tcb->start_index ; i< (tcb->start_index + tcb->h) ; i++)
-		for(int j =0; j<bmpInfo.biWidth ; j++){
-			/*********************************************************/
-			/*設定上下左右像素的位置                                 */
-			/*********************************************************/
-			int Top = i>0 ? i-1 : bmpInfo.biHeight-1;
-			int Down = i<bmpInfo.biHeight-1 ? i+1 : 0;
-			int Left = j>0 ? j-1 : bmpInfo.biWidth-1;
-			int Right = j<bmpInfo.biWidth-1 ? j+1 : 0;
-			/*********************************************************/
-			/*與上下左右像素做平均，並四捨五入                       */
-			/*********************************************************/
-			BMPSaveData[i][j].rgbBlue =  (double) (BMPData[i][j].rgbBlue+BMPData[Top][j].rgbBlue+BMPData[Down][j].rgbBlue+BMPData[i][Left].rgbBlue+BMPData[i][Right].rgbBlue)/5+0.5;
-			BMPSaveData[i][j].rgbGreen =  (double) (BMPData[i][j].rgbGreen+BMPData[Top][j].rgbGreen+BMPData[Down][j].rgbGreen+BMPData[i][Left].rgbGreen+BMPData[i][Right].rgbGreen)/5+0.5;
-			BMPSaveData[i][j].rgbRed =  (double) (BMPData[i][j].rgbRed+BMPData[Top][j].rgbRed+BMPData[Down][j].rgbRed+BMPData[i][Left].rgbRed+BMPData[i][Right].rgbRed)/5+0.5;
+	long my_rank = (long) param;
+	int Height =  ( my_rank ==thread_count-1 ? ((bmpInfo.biHeight / thread_count ) + bmpInfo.biHeight % thread_count) : bmpInfo.biHeight / thread_count);
+	int startIndex = (bmpInfo.biHeight / thread_count )*my_rank;
+	//cout<< "Now the thread is :" << my_rank << " Height : "<< Height << "  startIndex is : " << startIndex  << endl;
+	printf("Now the thread is : %ld , Height : %d , startIndex is : %d \n\n", my_rank , Height , startIndex);
+	//進行平滑運算	
+	for(int count = 0; count < NSmooth ; count ++){
+		pthread_mutex_lock(&mutex_p);
+		if(counter[count%2]==thread_count-1)  {
+			//把像素資料與暫存指標做交換
+			swap(BMPSaveData,BMPData);
+			counter[(count+1)%2]=0;
 		}
-
+		counter[count%2]++;
+		pthread_mutex_unlock(&mutex_p);
+		while(counter[count%2]<thread_count);
+		printf("Now the counter name is %d , number is %d , and now iterative is %d  \n\n" , count % 2 , counter[count%2] , count );
+		/* Using pthread do the thing */
+		for(int i = startIndex ; i< startIndex + Height  ; i++)
+			for(int j =0; j<bmpInfo.biWidth ; j++){
+				/*********************************************************/
+				/*設定上下左右像素的位置                                 */
+				/*********************************************************/
+				int Top = i>0 ? i-1 : bmpInfo.biHeight-1;
+				int Down = i<bmpInfo.biHeight-1 ? i+1 : 0;
+				int Left = j>0 ? j-1 : bmpInfo.biWidth-1;
+				int Right = j<bmpInfo.biWidth-1 ? j+1 : 0;
+				/*********************************************************/
+				/*與上下左右像素做平均，並四捨五入                       */
+				/*********************************************************/
+				BMPSaveData[i][j].rgbBlue =  (double) (BMPData[i][j].rgbBlue+BMPData[Top][j].rgbBlue+BMPData[Down][j].rgbBlue+BMPData[i][Left].rgbBlue+BMPData[i][Right].rgbBlue)/5+0.5;
+				BMPSaveData[i][j].rgbGreen =  (double) (BMPData[i][j].rgbGreen+BMPData[Top][j].rgbGreen+BMPData[Down][j].rgbGreen+BMPData[i][Left].rgbGreen+BMPData[i][Right].rgbGreen)/5+0.5;
+				BMPSaveData[i][j].rgbRed =  (double) (BMPData[i][j].rgbRed+BMPData[Top][j].rgbRed+BMPData[Down][j].rgbRed+BMPData[i][Left].rgbRed+BMPData[i][Right].rgbRed)/5+0.5;
+			}
+	}
 	return NULL;
 }
 
@@ -74,12 +88,14 @@ int main(int argc,char *argv[])
 /*  endwtime     ： 記錄結束時間                         */
 /*********************************************************/
 	char *infileName = "input.bmp";
-     	char *outfileName = "output2.bmp";
+     	char *outfileName = argv[2];
 	clock_t starttime = 0.0, endtime=0;
 	/* Get the amount number of thread */
-	int thread_count = strtol(argv[1], NULL , 10);
-	cout<< thread_count << endl;
+	thread_count = strtol(argv[1], NULL , 10);
+	long thread;
+	cout<< "Total thread number : " << thread_count << endl;
 	pthread_t *thread_handles = new pthread_t[ thread_count ];
+	pthread_mutex_init(&mutex_p, NULL);  
 	//讀取檔案
         if ( readBMP( infileName) )
                 cout << "Read file successfully!!" << endl;
@@ -89,37 +105,25 @@ int main(int argc,char *argv[])
 	starttime = clock();
 	//動態分配記憶體給暫存空間
         BMPData = alloc_memory( bmpInfo.biHeight, bmpInfo.biWidth);
-	/* make the  struct */
-	PARAM *TCB = new PARAM [thread_count];
-	for(int i = 0; i < thread_count ;  i ++){
-		TCB[i].h = ( i==thread_count-1 ? bmpInfo.biHeight / thread_count  : bmpInfo.biHeight / thread_count);
-		TCB[i].start_index = (bmpInfo.biHeight)*i;
-	}
-	for(int i = 0; i < thread_count ;  i ++){
-		cout << "The pid is "<< i << " , and the height is "<< TCB[i].h << "; startindex =  " << TCB[i].start_index<<endl;
-	}
-        //進行多次的平滑運算
-	for(int count = 0; count < NSmooth ; count ++){
-		//把像素資料與暫存指標做交換
-		swap(BMPSaveData,BMPData);
-		/* Using pthread do the thing */
-		for(int j = 0 ; j < thread_count ; j++){
-			pthread_create(&thread_handles[j] , NULL , cal_Smooth , (void*)&TCB[j] );
-		}
-		//cal_Smooth();
-	}
-	for(int i = 0; i < thread_count ; i++){
-		pthread_join(thread_handles[i] , NULL);
+	
+        //進行多次的平滑運算 
+        // TODO : Use pthread_create to include the 1000 times loop
+	for(thread = 0 ; thread < thread_count ; thread ++){
+		pthread_create(&thread_handles[thread] , NULL , cal_Smooth , (void*) thread );
+	}	
+	for(thread = 0; thread < thread_count ; thread++){
+		pthread_join(thread_handles[thread] , NULL);
 	}
  	//得到結束時間，並印出執行時間
 	endtime = clock();
-    	cout << "The execution time = "<< (float)((endtime-starttime) / CLOCKS_PER_SEC) <<endl ;
+    	//cout << "The execution time = "<< (float)((endtime-starttime) / CLOCKS_PER_SEC) <<endl ;
+ 	printf("The execution time is %f \n" , (float)((float)(endtime-starttime) / CLOCKS_PER_SEC)  );
  	//寫入檔案
         if ( saveBMP( outfileName ) )
                 cout << "Save file successfully!!" << endl;
         else
                 cout << "Save file fails!!" << endl;
-
+	pthread_mutex_destroy(&mutex_p);  
  	free(BMPData);
  	free(BMPSaveData);
         return 0;
